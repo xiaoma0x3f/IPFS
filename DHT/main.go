@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"math"
+	"slices"
 )
 
 // 第一个方法是注册方法
@@ -18,25 +19,41 @@ func NewBtServer() *BTServer {
 	return &b
 }
 
-func (b BTServer)BootNeighbors(targetNode NodeID) []Bucket {
+func (b BTServer) BootNeighbors(targetNode Node) []Bucket {
 	// 距离指数上升 32, 64, 128, 256, 512, 1024
 	// findIntervalDynamic 可以找出 a 在哪个区间
-	findIntervalDynamic := func(a int)int{
+	// [0, 31], [32, 63], [64, 127], [128, 255] index = 3
+	findIntervalDynamic := func(a int) int {
 		if a < 32 {
 			return 0
 		}
-		return int(math.Log2(float64(a))) -5 + 1
+		return int(math.Log2(float64(a))) - 5 + 1
 	}
 
 	result := make([]Bucket, 0, MaxBucketCnt)
-	for _, node := range b.AllNodeInfos{
-		targetDistance := CompareDistance(targetNode, node)
-		if findIntervalDynamic(targetDistance) >= len(result)-1 {
-			result = slices.Grow(result, targetLen - len(result))
+	for _, node := range b.AllNodeInfos {
+		if node.ID == targetNode.NodeId {
+			continue
+		}
+		targetDistance := CompareDistance(targetNode.NodeId, node.ID)
+		tarIndex := findIntervalDynamic(targetDistance)
+
+		if tarIndex+1 >= len(result) {
+			result = slices.Grow(result, tarIndex-len(result)+1)
+			result[tarIndex].NodeInfos = append(result[tarIndex].NodeInfos, node)
 		}
 	}
 
-	return 
+	for index, bucket := range result {
+		if index == 0 {
+			bucket.FromDistance = 0
+			bucket.ToDistance = 1<<5 - 1
+		}
+		bucket.FromDistance = 1 << (5 + index - 1)
+		bucket.ToDistance = 1<<(5+index) - 1
+	}
+
+	return result
 }
 
 type Bucket struct {
@@ -83,6 +100,7 @@ func NewNode(ip, port string, server *BTServer) *Node {
 	node := Node{}
 	node.NodeId = NewNodeID(fmt.Sprintf("%s:%s", ip, port))
 	node.ServerRef = server
+	node.ContentRouting = node.ServerRef.BootNeighbors(node)
 
 	return node.BootStrap(ip, port)
 }
@@ -91,7 +109,6 @@ func (node Node) BootStrap(ip, port string) *Node {
 	// 都是网络操作, 内存快速mock实现
 	newNodeInfo := NodeInfo{node.NodeId, ip, port}
 	node.ServerRef.AllNodeInfos = append(node.ServerRef.AllNodeInfos, newNodeInfo)
-	node.ContentRouting = 
 
 	return &node
 }
